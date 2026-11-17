@@ -88,6 +88,7 @@ select:focus-visible{outline:2px solid var(--lime);outline-offset:2px}
 <script>
 (()=>{'use strict';
 const $=selector=>document.querySelector(selector);
+let S=null,tab='home';
 
 const leagueCatalog={
 AUR:{name:'Aurelia Premier',country:'Aurelia',flag:'✦',clubs:'Asterford FC|87,Bellhaven United|82,Cindergate City|80,Dunmere Athletic|77,Eastvale Rovers|76,Fairmont FC|79,Greycastle Town|81,Highmoor United|75,Ironbridge FC|84,Juniper Vale|74,Kingswell Athletic|86,Larkspur City|78,Mistford FC|73,Northwatch United|83,Oakenshade FC|76,Pinecrest Rovers|75,Quartz Bay FC|80,Redcliff Athletic|78,Silvermere Town|82,Thornfield FC|77'.split(',').map((v,i)=>{let p=v.split('|');return[p[0],'AUR_'+String(i+1).padStart(2,'0'),+p[1]]}),seed:{}},
