@@ -57,17 +57,19 @@ footer{text-align:center;color:#81939e;font-size:11px;padding:16px}
 <section class="panel">
   <h2>ข้อควรรู้ก่อนเปิดเกม</h2>
   <p class="note"><strong>ความเข้ากันได้:</strong> รุ่นเริ่มต้นนี้รองรับ HTML แบบไฟล์เดียว หากเกมมีไฟล์ CSS, JavaScript, รูปภาพ หรือเสียงแยกต่างหาก ต้องเพิ่มระบบนำเข้าแพ็กเกจ ZIP ในรุ่นถัดไป</p>
-  <p class="note"><strong>ระบบเซฟ:</strong> เกมที่เปิดในพื้นที่แยกแบบปลอดภัยอาจไม่สามารถใช้ Local Storage เดิมได้โดยตรง จึงต้องทดสอบกับไฟล์เกมจริงก่อนยืนยันว่าเซฟเดิมจะทำงานได้</p>
-  <p class="note"><strong>ความปลอดภัย:</strong> นำเข้าเฉพาะไฟล์เกมที่คุณเชื่อถือเท่านั้น ไฟล์ HTML สามารถมี JavaScript ที่ทำงานได้</p>
+  <p class="note"><strong>ระบบเซฟ:</strong> เปิดเกมเป็นแท็บใหม่ผ่าน Blob URL บนโดเมนเดียวกับ Launcher เพื่อให้ Local Storage และ IndexedDB ของเกมทำงานได้ตามปกติ และคงอยู่เมื่อปิด/เปิด Launcher หรือ import เวอร์ชันใหม่ (ถ้าเกมใช้ origin เดิมและคีย์เซฟเดิม)</p>
+  <p class="note"><strong>ขอบเขตข้อมูล:</strong> เกมที่นำเข้าทั้งหมดใช้ origin เดียวกัน จึงอาจเห็นหรือแก้ไข Local Storage / IndexedDB ของกันและกันได้ รวมถึงข้อมูลของ Launcher หากเป็นไฟล์ที่ไม่น่าเชื่อถือ อย่านำเข้า</p>
+  <p class="note"><strong>ความปลอดภัย:</strong> เปิดเฉพาะไฟล์เกมที่คุณสร้างเองหรือเชื่อถือเท่านั้น เพราะ JavaScript ในไฟล์จะทำงานในแท็บใหม่บน origin เดียวกัน</p>
 </section>
 <footer>Standalone Game Launcher • Local storage only • No GitHub connection</footer>
 </main>
-<div id="player" aria-hidden="true"><div class="playerbar"><strong id="playingName">กำลังเล่นเกม</strong><button id="closePlayer" class="secondary">ปิดเกม ✕</button></div><iframe id="gameframe" title="Game player" sandbox="allow-scripts allow-forms allow-pointer-lock allow-downloads"></iframe></div>
+
 <script>
 (()=> {
  const DB='standalone-game-launcher', STORE='games', VERSION=1;
  const $=s=>document.querySelector(s);
  let db;
+ const activeUrls=new Set();
  function openDB(){return new Promise((resolve,reject)=>{const req=indexedDB.open(DB,VERSION);req.onupgradeneeded=()=>{const d=req.result;if(!d.objectStoreNames.contains(STORE)){const st=d.createObjectStore(STORE,{keyPath:'id'});st.createIndex('name','name',{unique:false});}};req.onsuccess=()=>resolve(req.result);req.onerror=()=>reject(req.error);});}
  function tx(mode='readonly'){return db.transaction(STORE,mode).objectStore(STORE);}
  function all(){return new Promise((res,rej)=>{const r=tx().getAll();r.onsuccess=()=>res(r.result.sort((a,b)=>b.added-a.added));r.onerror=()=>rej(r.error);});}
@@ -77,8 +79,20 @@ footer{text-align:center;color:#81939e;font-size:11px;padding:16px}
  function safeName(s){return s.replace(/[<>:"/\\|?*\x00-\x1f]/g,'_').slice(0,100)||'Untitled game';}
  async function render(){const items=await all(),root=$('#games');if(!items.length){root.innerHTML='<div class="empty">ยังไม่มีเกมในคลัง<br><span class="small">กดเลือกไฟล์ HTML ด้านบนเพื่อเริ่มต้น</span></div>';return;}root.innerHTML='';for(const g of items){const el=document.createElement('article');el.className='game';const top=document.createElement('div');top.className='row';const title=document.createElement('div');title.className='game-title';title.textContent=g.name;const tag=document.createElement('span');tag.className='tag';tag.textContent=g.version||'Imported';top.append(title,tag);const meta=document.createElement('div');meta.className='small';meta.textContent=new Date(g.added).toLocaleString()+' • '+(g.size/1024).toFixed(1)+' KB';const actions=document.createElement('div');actions.className='actions';const play=document.createElement('button');play.textContent='▶ Play';play.onclick=()=>launch(g);const exp=document.createElement('button');exp.className='secondary';exp.textContent='Export';exp.onclick=()=>download(g);const remove=document.createElement('button');remove.className='danger';remove.textContent='ลบ';remove.onclick=async()=>{if(confirm('ลบ '+g.name+' เวอร์ชันนี้ออกจากเครื่อง?')){await del(g.id);await render();msg('ลบไฟล์ออกจากคลังแล้ว');}};actions.append(play,exp,remove);el.append(top,meta,actions);root.append(el);}}
  function download(g){const a=document.createElement('a'),u=URL.createObjectURL(g.blob);a.href=u;a.download=g.filename||'game.html';a.click();setTimeout(()=>URL.revokeObjectURL(u),30000);}
- async function launch(g){$('#playingName').textContent=g.name;const player=$('#player'),frame=$('#gameframe');frame.srcdoc=await g.blob.text();player.classList.add('show');player.setAttribute('aria-hidden','false');}
- $('#closePlayer').onclick=()=>{const f=$('#gameframe');f.src='about:blank';$('#player').classList.remove('show');$('#player').setAttribute('aria-hidden','true');};
+ function launch(g){
+   // A top-level Blob document inherits this HTTPS origin, so the imported
+   // game can use normal persistent localStorage/IndexedDB (unlike an
+   // opaque-origin sandboxed srcdoc iframe).
+   const url=URL.createObjectURL(g.blob);activeUrls.add(url);
+   const opened=window.open(url,'_blank','noopener,noreferrer');
+   if(!opened){
+     const a=document.createElement('a');a.href=url;a.target='_blank';a.rel='noopener noreferrer';
+     a.textContent='แตะที่นี่เพื่อเปิด '+g.name;a.style.cssText='display:block;padding:14px;color:#9be36b;background:#192631;border-radius:12px;margin-top:10px';
+     $('#games').prepend(a);
+     msg('เบราว์เซอร์บล็อกหน้าต่างใหม่ กรุณาแตะลิงก์เปิดเกมที่แสดงด้านบน',true);
+   }else msg('เปิด '+g.name+' ในแท็บใหม่แล้ว');
+ }
+ window.addEventListener('pagehide',()=>{for(const u of activeUrls)URL.revokeObjectURL(u);activeUrls.clear();});
  $('#file').addEventListener('change',async e=>{const f=e.target.files&&e.target.files[0];if(!f)return;try{if(!/\.html?$/i.test(f.name)&&f.type!=='text/html')throw new Error('กรุณาเลือกไฟล์ .html หรือ .htm');if(f.size>20*1024*1024)throw new Error('ไฟล์ใหญ่เกิน 20 MB สำหรับรุ่นเริ่มต้น');const text=await f.text();if(!/<html[\s>]/i.test(text)&&!/<body[\s>]/i.test(text))throw new Error('ไม่พบโครงสร้าง HTML ที่คาดหวัง');const name=safeName(f.name.replace(/\.html?$/i,''));const versions=(await all()).filter(x=>x.name===name);const version='v'+(versions.length+1);await put({id:crypto.randomUUID?crypto.randomUUID():String(Date.now())+Math.random(),name,filename:f.name,version,added:Date.now(),size:f.size,blob:new Blob([text],{type:'text/html'})});await render();msg('นำเข้า '+f.name+' สำเร็จ ('+version+')');}catch(err){msg(err.message||'ไม่สามารถนำเข้าไฟล์ได้',true);}finally{e.target.value='';}});
  $('#refresh').onclick=render;
  $('#exportAll').onclick=async()=>{const items=await all();if(!items.length){msg('ยังไม่มีไฟล์ให้ส่งออก',true);return;}for(const g of items)download(g);msg('เริ่มส่งออกไฟล์ทั้งหมดแล้ว');};
